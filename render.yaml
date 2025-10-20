@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: unified-daily-tasks-app
+    env: node
+    branch: main
+    buildCommand: npm install
+    startCommand: node src/app.js
+    healthCheckPath: /health
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      - key: SLACK_APP_TOKEN
+        sync: false
+      - key: MONDAY_API_KEY
+        sync: false
+      - key: MONDAY_WORKSPACE_ID
+        sync: false
+      - key: MONDAY_BOARD_ID
+        sync: false
+      - key: DAILY_SUMMARY_TIME
+        value: "09:00"
+      - key: TZ
+        value: America/Los_Angeles
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "100"
+      - key: CACHE_TTL
+        value: "3600"
+      - key: LOG_LEVEL
+        value: info
