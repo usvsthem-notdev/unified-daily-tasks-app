@@ -372,7 +372,8 @@ class MondayService {
     `;
     const data = await this.query(query, { boardId: [boardId], limit });
     const board = data.boards[0];
-    const items = board?.items_page?.items || [];\n    const columns = board?.columns || [];
+    const items = board?.items_page?.items || [];
+    const columns = board?.columns || [];
     
     // Enrich items with column metadata
     return items.map(item => ({
