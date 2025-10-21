@@ -2,8 +2,14 @@ class MondayWebhook {
   static async handle(payload, app, mondayService) {
     try {
       // Handle challenge verification
-      if (payload.challenge) {
+      if (payload && payload.challenge) {
         return { challenge: payload.challenge };
+      }
+
+      // Validate payload exists
+      if (!payload) {
+        console.log('No payload received');
+        return { status: 'ignored' };
       }
 
       // Extract event data
@@ -51,7 +57,7 @@ class MondayWebhook {
 
       // Find assigned users
       const peopleColumn = item.column_values.find(col => 
-        col.title === 'Person' || col.id === 'person'
+        col.id === 'person' || col.text?.includes('@')
       );
 
       if (!peopleColumn || !peopleColumn.persons_and_teams) return;
@@ -108,9 +114,7 @@ class MondayWebhook {
       if (!item) return;
 
       // Find assigned users
-      const peopleColumn = item.column_values.find(col => 
-        col.title === 'Person' || col.id === 'person'
-      );
+      const peopleColumn = item.column_values.find(col => col.id === 'person');
 
       if (!peopleColumn || !peopleColumn.persons_and_teams) return;
 
@@ -142,9 +146,7 @@ class MondayWebhook {
       if (!item) return;
 
       // Find assigned users
-      const peopleColumn = item.column_values.find(col => 
-        col.title === 'Person' || col.id === 'person'
-      );
+      const peopleColumn = item.column_values.find(col => col.id === 'person');
 
       if (!peopleColumn || !peopleColumn.persons_and_teams) return;
 
