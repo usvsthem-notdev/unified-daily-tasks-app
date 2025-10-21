@@ -6,6 +6,10 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
 
+// CRITICAL: Define PORT before anything else to ensure proper binding
+const PORT = parseInt(process.env.PORT) || 3000;
+console.log(`🔧 Configuring app to use PORT: ${PORT} (from env: ${process.env.PORT || 'not set, using default'})`);
+
 // Import services
 const MondayService = require('./services/monday');
 const CacheService = require('./services/cache');
@@ -67,7 +71,8 @@ receiver.router.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    port: PORT
   });
 });
 
@@ -182,8 +187,6 @@ app.error(async (error) => {
 });
 
 // Start the app
-const PORT = process.env.PORT || 3000;
-
 (async () => {
   await app.start(PORT);
   console.log(`⚡️ Unified Daily Tasks App is running on port ${PORT}`);
@@ -191,6 +194,7 @@ const PORT = process.env.PORT || 3000;
   console.log(`🏥 Health check at http://localhost:${PORT}/health`);
   console.log(`✅ User mapping service initialized`);
   console.log(`✅ Channel error fixes applied`);
+  console.log(`✅ Port binding verified: ${PORT}`);
 })();
 
 module.exports = { app, mondayService, cacheService, metricsService, userMappingService };
