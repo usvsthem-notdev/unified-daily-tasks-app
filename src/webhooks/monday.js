@@ -1,5 +1,5 @@
 class MondayWebhook {
-  static async handle(payload, app, mondayService) {
+  static async handle(payload, app, mondayService, userMappingService) {
     try {
       // Handle challenge verification
       if (payload && payload.challenge) {
@@ -23,15 +23,15 @@ class MondayWebhook {
       // Handle different event types
       switch (event.type) {
         case 'create_item':
-          await this.handleItemCreated(event, app, mondayService);
+          await this.handleItemCreated(event, app, mondayService, userMappingService);
           break;
         
         case 'change_column_value':
-          await this.handleColumnChanged(event, app, mondayService);
+          await this.handleColumnChanged(event, app, mondayService, userMappingService);
           break;
         
         case 'create_update':
-          await this.handleUpdateCreated(event, app, mondayService);
+          await this.handleUpdateCreated(event, app, mondayService, userMappingService);
           break;
         
         default:
@@ -46,7 +46,17 @@ class MondayWebhook {
     }
   }
 
-  static async handleItemCreated(event, app, mondayService) {
+  /**
+   * Extract assignee identifiers from a people column
+   */
+  static extractAssignees(peopleColumn) {
+    if (!peopleColumn || !peopleColumn.text) return [];
+
+    // The text field contains comma-separated names/emails
+    return peopleColumn.text.split(',').map(a => a.trim()).filter(a => a);
+  }
+
+  static async handleItemCreated(event, app, mondayService, userMappingService) {
     try {
       const { itemId, boardId, itemName } = event;
 
@@ -57,23 +67,41 @@ class MondayWebhook {
 
       // Find assigned users
       const peopleColumn = item.column_values.find(col => 
-        col.id === 'person' || col.text?.includes('@')
+        col.type === 'multiple-person' || col.type === 'person' ||
+        col.id === 'person' || col.title?.toLowerCase().includes('person')
       );
 
-      if (!peopleColumn || !peopleColumn.persons_and_teams) return;
+      const assignees = this.extractAssignees(peopleColumn);
+
+      if (assignees.length === 0) {
+        console.log(`No assignees found for item ${itemId}`);
+        return;
+      }
+
+      console.log(`Found ${assignees.length} assignees for new item: ${assignees.join(', ')}`);
+
+      // Convert Monday identifiers to Slack user IDs
+      const slackUserMap = await userMappingService.getSlackUserIds(assignees);
 
       // Notify assigned users
-      for (const person of peopleColumn.persons_and_teams) {
+      for (const assignee of assignees) {
+        const slackUserId = slackUserMap.get(assignee);
+        
+        if (!slackUserId) {
+          console.log(`Skipping notification for ${assignee} - no Slack mapping`);
+          continue;
+        }
+
         try {
           await app.client.chat.postMessage({
-            channel: person.id,
+            channel: slackUserId,  // ✅ Now using Slack user ID!
             text: `📋 New task assigned: *${itemName}*`,
             blocks: [
               {
                 type: 'section',
                 text: {
                   type: 'mrkdwn',
-                  text: `📋 *New Task Assigned*\n\n*${itemName}*`
+                  text: `📋 *New Task Assigned*\\n\\n*${itemName}*`
                 }
               },
               {
@@ -93,8 +121,9 @@ class MondayWebhook {
               }
             ]
           });
+          console.log(`Sent notification to ${slackUserId} (${assignee})`);
         } catch (error) {
-          console.error(`Failed to notify user ${person.id}:`, error);
+          console.error(`Failed to notify Slack user ${slackUserId} (${assignee}):`, error);
         }
       }
 
@@ -103,33 +132,54 @@ class MondayWebhook {
     }
   }
 
-  static async handleColumnChanged(event, app, mondayService) {
+  static async handleColumnChanged(event, app, mondayService, userMappingService) {
     try {
       const { itemId, columnId, value, previousValue } = event;
 
       // Only notify on status changes
-      if (columnId !== 'status') return;
+      if (!columnId || !columnId.includes('status')) {
+        console.log(`Skipping non-status column change: ${columnId}`);
+        return;
+      }
 
       const item = await mondayService.getItem(itemId);
       if (!item) return;
 
       // Find assigned users
-      const peopleColumn = item.column_values.find(col => col.id === 'person');
+      const peopleColumn = item.column_values.find(col => 
+        col.type === 'multiple-person' || col.type === 'person'
+      );
 
-      if (!peopleColumn || !peopleColumn.persons_and_teams) return;
+      const assignees = this.extractAssignees(peopleColumn);
 
-      const statusColumn = item.column_values.find(col => col.id === 'status');
+      if (assignees.length === 0) return;
+
+      const statusColumn = item.column_values.find(col => 
+        col.type === 'color' || col.id.includes('status')
+      );
       const newStatus = statusColumn?.text || 'Unknown';
 
+      console.log(`Status changed for item ${itemId}: ${newStatus}, notifying ${assignees.length} users`);
+
+      // Convert Monday identifiers to Slack user IDs
+      const slackUserMap = await userMappingService.getSlackUserIds(assignees);
+
       // Notify assigned users of status change
-      for (const person of peopleColumn.persons_and_teams) {
+      for (const assignee of assignees) {
+        const slackUserId = slackUserMap.get(assignee);
+        
+        if (!slackUserId) {
+          console.log(`Skipping notification for ${assignee} - no Slack mapping`);
+          continue;
+        }
+
         try {
           await app.client.chat.postMessage({
-            channel: person.id,
+            channel: slackUserId,  // ✅ Now using Slack user ID!
             text: `🔄 Task status updated: *${item.name}* → ${newStatus}`
           });
         } catch (error) {
-          console.error(`Failed to notify user ${person.id}:`, error);
+          console.error(`Failed to notify Slack user ${slackUserId} (${assignee}):`, error);
         }
       }
 
@@ -138,7 +188,7 @@ class MondayWebhook {
     }
   }
 
-  static async handleUpdateCreated(event, app, mondayService) {
+  static async handleUpdateCreated(event, app, mondayService, userMappingService) {
     try {
       const { itemId, updateId, textBody } = event;
 
@@ -146,19 +196,35 @@ class MondayWebhook {
       if (!item) return;
 
       // Find assigned users
-      const peopleColumn = item.column_values.find(col => col.id === 'person');
+      const peopleColumn = item.column_values.find(col => 
+        col.type === 'multiple-person' || col.type === 'person'
+      );
 
-      if (!peopleColumn || !peopleColumn.persons_and_teams) return;
+      const assignees = this.extractAssignees(peopleColumn);
+
+      if (assignees.length === 0) return;
+
+      console.log(`New comment on item ${itemId}, notifying ${assignees.length} users`);
+
+      // Convert Monday identifiers to Slack user IDs
+      const slackUserMap = await userMappingService.getSlackUserIds(assignees);
 
       // Notify assigned users of new update
-      for (const person of peopleColumn.persons_and_teams) {
+      for (const assignee of assignees) {
+        const slackUserId = slackUserMap.get(assignee);
+        
+        if (!slackUserId) {
+          console.log(`Skipping notification for ${assignee} - no Slack mapping`);
+          continue;
+        }
+
         try {
           await app.client.chat.postMessage({
-            channel: person.id,
-            text: `💬 New comment on *${item.name}*:\n> ${textBody.substring(0, 200)}${textBody.length > 200 ? '...' : ''}`
+            channel: slackUserId,  // ✅ Now using Slack user ID!
+            text: `💬 New comment on *${item.name}*:\\n> ${textBody.substring(0, 200)}${textBody.length > 200 ? '...' : ''}`
           });
         } catch (error) {
-          console.error(`Failed to notify user ${person.id}:`, error);
+          console.error(`Failed to notify Slack user ${slackUserId} (${assignee}):`, error);
         }
       }
 
