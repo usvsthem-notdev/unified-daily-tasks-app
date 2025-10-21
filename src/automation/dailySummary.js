@@ -1,5 +1,5 @@
 class DailySummary {
-  static async send(app, mondayService, cacheService) {
+  static async send(app, mondayService, cacheService, userMappingService) {
     try {
       console.log('Starting daily task summary...');
 
@@ -8,38 +8,60 @@ class DailySummary {
       // Get all tasks from board
       const tasks = await mondayService.getBoardItems(boardId);
 
-      // Group tasks by assigned user
-      const tasksByUser = new Map();
+      // Group tasks by assigned user (Monday.com identifier)
+      const tasksByMondayUser = new Map();
 
       tasks.forEach(task => {
         const peopleColumn = task.column_values.find(col => 
-          col.title === 'Person' || col.id === 'person'
+          col.title === 'Person' || col.id === 'person' || 
+          col.type === 'multiple-person' || col.type === 'person'
         );
 
-        if (!peopleColumn || !peopleColumn.persons_and_teams) return;
+        if (!peopleColumn || !peopleColumn.text) return;
 
-        peopleColumn.persons_and_teams.forEach(person => {
-          if (!tasksByUser.has(person.id)) {
-            tasksByUser.set(person.id, []);
+        // Extract emails/names from the people column text
+        const assignees = peopleColumn.text.split(',').map(a => a.trim());
+
+        assignees.forEach(assignee => {
+          if (!assignee) return;
+          
+          if (!tasksByMondayUser.has(assignee)) {
+            tasksByMondayUser.set(assignee, []);
           }
-          tasksByUser.get(person.id).push(task);
+          tasksByMondayUser.get(assignee).push(task);
         });
       });
 
+      console.log(`Found ${tasksByMondayUser.size} users with tasks`);
+
+      // Convert Monday.com identifiers to Slack user IDs
+      const mondayIdentifiers = Array.from(tasksByMondayUser.keys());
+      const slackUserMap = await userMappingService.getSlackUserIds(mondayIdentifiers);
+
+      console.log(`Mapped ${slackUserMap.size} users to Slack IDs`);
+
       // Send summary to each user
-      for (const [userId, userTasks] of tasksByUser) {
+      for (const [mondayIdentifier, userTasks] of tasksByMondayUser) {
         try {
-          // Check user preferences
-          const prefs = cacheService.getUserPreferences(userId);
+          const slackUserId = slackUserMap.get(mondayIdentifier);
           
-          if (!prefs.notifications) {
-            console.log(`Skipping summary for ${userId} - notifications disabled`);
+          if (!slackUserId) {
+            console.log(`Skipping summary for ${mondayIdentifier} - no Slack mapping found`);
             continue;
           }
 
-          await this.sendUserSummary(app, userId, userTasks);
+          // Check user preferences
+          const prefs = cacheService.getUserPreferences(slackUserId);
+          
+          if (prefs && !prefs.notifications) {
+            console.log(`Skipping summary for ${slackUserId} - notifications disabled`);
+            continue;
+          }
+
+          await this.sendUserSummary(app, slackUserId, userTasks, mondayIdentifier);
+          console.log(`Sent daily summary to ${slackUserId} (${mondayIdentifier})`);
         } catch (error) {
-          console.error(`Failed to send summary to ${userId}:`, error);
+          console.error(`Failed to send summary to ${mondayIdentifier}:`, error);
         }
       }
 
@@ -50,16 +72,22 @@ class DailySummary {
     }
   }
 
-  static async sendUserSummary(app, userId, tasks) {
+  static async sendUserSummary(app, slackUserId, tasks, mondayIdentifier) {
     // Categorize tasks by status
     const pending = tasks.filter(t => {
-      const status = t.column_values.find(c => c.id === 'status');
-      return status && status.text !== 'Done' && status.text !== 'Complete';
+      const status = t.column_values.find(c => 
+        c.type === 'color' || c.id.includes('status') || c.title?.toLowerCase().includes('status')
+      );
+      const statusText = status?.text?.toLowerCase() || '';
+      return statusText !== 'done' && statusText !== 'complete' && statusText !== 'completed';
     });
 
     const completed = tasks.filter(t => {
-      const status = t.column_values.find(c => c.id === 'status');
-      return status && (status.text === 'Done' || status.text === 'Complete');
+      const status = t.column_values.find(c => 
+        c.type === 'color' || c.id.includes('status') || c.title?.toLowerCase().includes('status')
+      );
+      const statusText = status?.text?.toLowerCase() || '';
+      return statusText === 'done' || statusText === 'complete' || statusText === 'completed';
     });
 
     // Build summary message
@@ -87,11 +115,11 @@ class DailySummary {
         fields: [
           {
             type: 'mrkdwn',
-            text: `*📝 Pending Tasks:*\n${pending.length}`
+            text: `*📝 Pending Tasks:*\\n${pending.length}`
           },
           {
             type: 'mrkdwn',
-            text: `*✅ Completed:*\n${completed.length}`
+            text: `*✅ Completed:*\\n${completed.length}`
           }
         ]
       }
@@ -108,7 +136,9 @@ class DailySummary {
       });
 
       pending.slice(0, 5).forEach(task => {
-        const statusColumn = task.column_values.find(c => c.id === 'status');
+        const statusColumn = task.column_values.find(c => 
+          c.type === 'color' || c.id.includes('status')
+        );
         const status = statusColumn?.text || 'No Status';
 
         blocks.push({
@@ -161,11 +191,17 @@ class DailySummary {
       ]
     });
 
-    // Send message
-    await app.client.chat.postMessage({
-      channel: userId,
-      blocks
-    });
+    // Send message using Slack user ID
+    try {
+      await app.client.chat.postMessage({
+        channel: slackUserId,  // ✅ Now using Slack user ID!
+        blocks,
+        text: `📊 Daily Task Summary: ${pending.length} pending, ${completed.length} completed`
+      });
+    } catch (error) {
+      console.error(`Failed to send message to Slack user ${slackUserId}:`, error);
+      throw error;
+    }
   }
 }
 
