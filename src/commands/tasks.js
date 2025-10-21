@@ -1,7 +1,7 @@
 class TasksCommand {
-  static async handle(command, client, respond, mondayService, cacheService) {
+  static async handle(command, client, respond, mondayService, cacheService, userMappingService) {
     const startTime = Date.now();
-    const userId = command.user_id;
+    const slackUserId = command.user_id;
 
     try {
       // Send immediate acknowledgment
@@ -10,14 +10,36 @@ class TasksCommand {
         response_type: 'ephemeral'
       });
 
-      // Fetch tasks from ALL boards
-      const result = await mondayService.getAllUserTasks(userId);
+      // CRITICAL FIX: Map Slack user ID to Monday.com email/name
+      const mondayIdentifier = await userMappingService.getMondayIdentifier(slackUserId);
+      
+      if (!mondayIdentifier) {
+        await respond({
+          text: '❌ Could not identify your Monday.com account. Please ensure:\n' +
+                '1. Your Slack profile has an email address set\n' +
+                '2. You have the same email in Monday.com\n' +
+                '3. You are assigned to tasks in Monday.com\n\n' +
+                `Debug info: Slack User ID = ${slackUserId}`,
+          response_type: 'ephemeral',
+          replace_original: true
+        });
+        return;
+      }
+
+      console.log(`Slack user ${slackUserId} mapped to Monday identifier: ${mondayIdentifier}`);
+
+      // Fetch tasks from ALL boards using the Monday.com identifier
+      const result = await mondayService.getAllUserTasks(mondayIdentifier);
       const { classified } = result;
       const { myTasks, overdue, dueToday, dueThisWeek, completed } = classified;
 
       if (myTasks.length === 0) {
         await respond({
-          text: '📋 You have no tasks assigned to you across any boards.',
+          text: `📋 No tasks found assigned to ${mondayIdentifier} across any boards.\n\n` +
+                `💡 **Troubleshooting tips:**\n` +
+                `• Verify tasks are assigned to "${mondayIdentifier}" in Monday.com\n` +
+                `• Check that the person column contains your email or name\n` +
+                `• Ensure you have access to the boards with your tasks`,
           response_type: 'ephemeral',
           replace_original: true
         });
@@ -54,7 +76,7 @@ class TasksCommand {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `• *${task.name}* - _${task.board_name}_\n  Due: ${dueDateStr}`
+              text: `• *${task.name}* - _${task.board_name}_\\n  Due: ${dueDateStr}`
             },
             accessory: {
               type: 'button',
@@ -141,7 +163,7 @@ class TasksCommand {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `• *${task.name}* - _${task.board_name}_\n  Due: ${dueDateStr}`
+              text: `• *${task.name}* - _${task.board_name}_\\n  Due: ${dueDateStr}`
             },
             accessory: {
               type: 'button',
@@ -225,7 +247,7 @@ class TasksCommand {
           elements: [
             {
               type: 'mrkdwn',
-              text: `📊 *Total:* ${myTasks.length} tasks | *Completed:* ${completed.length} | *Boards:* ${result.boards.length}`
+              text: `📊 *Total:* ${myTasks.length} tasks | *Completed:* ${completed.length} | *Boards:* ${result.boards.length} | *User:* ${mondayIdentifier}`
             }
           ]
         }
@@ -238,13 +260,14 @@ class TasksCommand {
       });
 
       const duration = Date.now() - startTime;
-      console.log(`Tasks command completed in ${duration}ms - Found ${myTasks.length} tasks across ${result.boards.length} boards`);
+      console.log(`Tasks command completed in ${duration}ms - Found ${myTasks.length} tasks across ${result.boards.length} boards for ${mondayIdentifier}`);
 
     } catch (error) {
       console.error('Error in tasks command:', error);
       await respond({
-        text: '❌ Failed to retrieve tasks from Monday.com. Please try again.\n' +
-              'If this persists, contact support.',
+        text: '❌ Failed to retrieve tasks from Monday.com. Please try again.\\n' +
+              'If this persists, contact support.\\n\\n' +
+              `Error: ${error.message}`,
         response_type: 'ephemeral',
         replace_original: true
       });
