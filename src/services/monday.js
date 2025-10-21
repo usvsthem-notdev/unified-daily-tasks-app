@@ -97,10 +97,11 @@ class MondayService {
 
   /**
    * Get ALL tasks for a user across ALL boards with classification
+   * @param {string} userIdentifier - Email address or name of the user in Monday.com
    */
-  async getAllUserTasks(userId) {
+  async getAllUserTasks(userIdentifier) {
     try {
-      console.log('Fetching all boards...');
+      console.log(`Fetching all boards for user: ${userIdentifier}...`);
       const boards = await this.getAllBoards();
       
       if (boards.length === 0) {
@@ -165,7 +166,7 @@ class MondayService {
       console.log(`Total tasks found: ${allTasks.length}`);
 
       // Classify tasks
-      const classified = this.classifyTasks(allTasks, userId);
+      const classified = this.classifyTasks(allTasks, userIdentifier);
 
       return {
         tasks: allTasks,
@@ -181,8 +182,10 @@ class MondayService {
 
   /**
    * Classify tasks by status, assignee, due date, etc.
+   * @param {Array} tasks - Array of task objects
+   * @param {string} userIdentifier - Email address or name of the user (NOT Slack user ID!)
    */
-  classifyTasks(tasks, userId) {
+  classifyTasks(tasks, userIdentifier) {
     const classifications = {
       myTasks: [],
       overdue: [],
@@ -192,6 +195,12 @@ class MondayService {
       unassigned: [],
       allTasks: tasks
     };
+
+    // Normalize user identifier for matching
+    const normalizedIdentifier = userIdentifier?.toLowerCase().trim();
+    
+    console.log(`Classifying tasks for user identifier: ${userIdentifier}`);
+    console.log(`Normalized identifier: ${normalizedIdentifier}`);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -220,10 +229,31 @@ class MondayService {
         status = statusColumn.text.toLowerCase();
       }
 
-      // Check if assigned to user
+      // CRITICAL FIX: Check if assigned to user using email or name matching
       let isMyTask = false;
-      if (peopleColumn && peopleColumn.text) {
-        isMyTask = peopleColumn.text.includes(userId);
+      if (peopleColumn && peopleColumn.text && normalizedIdentifier) {
+        const assigneeText = peopleColumn.text.toLowerCase().trim();
+        
+        // Try multiple matching strategies
+        // 1. Direct substring match (handles "John Doe" in "John Doe, Jane Smith")
+        isMyTask = assigneeText.includes(normalizedIdentifier);
+        
+        // 2. If identifier looks like email, try extracting username part
+        if (!isMyTask && normalizedIdentifier.includes('@')) {
+          const emailUsername = normalizedIdentifier.split('@')[0];
+          isMyTask = assigneeText.includes(emailUsername);
+        }
+        
+        // 3. If identifier has spaces (is a name), try matching parts
+        if (!isMyTask && normalizedIdentifier.includes(' ')) {
+          const nameParts = normalizedIdentifier.split(' ');
+          isMyTask = nameParts.every(part => assigneeText.includes(part));
+        }
+        
+        // Debug logging for first few tasks
+        if (task.id && peopleColumn.text) {
+          console.log(`Task "${task.name}": Assignee="${peopleColumn.text}", Match=${isMyTask}`);
+        }
       }
 
       // Parse due date
@@ -283,6 +313,8 @@ class MondayService {
     classifications.overdue.sort(sortByDueDate);
     classifications.dueToday.sort(sortByDueDate);
     classifications.dueThisWeek.sort(sortByDueDate);
+
+    console.log(`Classification complete: ${classifications.myTasks.length} tasks assigned to user`);
 
     return classifications;
   }
@@ -467,10 +499,15 @@ class MondayService {
     return data.create_update;
   }
 
-  async getUserTasks(boardId, userId) {
+  /**
+   * Get user tasks - now accepts email/name instead of Slack user ID
+   * @param {string} boardId - Board ID (optional, if null searches all boards)
+   * @param {string} userIdentifier - Email or name of the user in Monday.com
+   */
+  async getUserTasks(boardId, userIdentifier) {
     // If no boardId provided, fetch from all boards
     if (!boardId) {
-      const result = await this.getAllUserTasks(userId);
+      const result = await this.getAllUserTasks(userIdentifier);
       return result.classified.myTasks;
     }
 
@@ -520,11 +557,16 @@ class MondayService {
       })
     }));
     
-    // Filter items assigned to user
+    // Filter items assigned to user using text matching
+    const normalizedIdentifier = userIdentifier?.toLowerCase().trim();
     return enrichedItems.filter(item => {
-      const peopleColumn = item.column_values.find(col => col.persons_and_teams);
-      if (!peopleColumn) return false;
-      return peopleColumn.persons_and_teams.some(person => person.id === userId);
+      const peopleColumn = item.column_values.find(col => 
+        col.type === 'multiple-person' || col.type === 'person'
+      );
+      if (!peopleColumn || !peopleColumn.text) return false;
+      
+      const assigneeText = peopleColumn.text.toLowerCase().trim();
+      return assigneeText.includes(normalizedIdentifier);
     });
   }
 }
