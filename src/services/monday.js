@@ -372,8 +372,7 @@ class MondayService {
     `;
     const data = await this.query(query, { boardId: [boardId], limit });
     const board = data.boards[0];
-    const items = board?.items_page?.items || [];
-    const columns = board?.columns || [];
+    const items = board?.items_page?.items || [];\n    const columns = board?.columns || [];
     
     // Enrich items with column metadata
     return items.map(item => ({
@@ -411,8 +410,9 @@ class MondayService {
   }
 
   async updateItem(boardId, itemId, columnValues) {
+    // CRITICAL FIX: Change JSON to JSON! to match Monday.com API requirement
     const query = `
-      mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON) {
+      mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
         change_multiple_column_values(
           board_id: $boardId,
           item_id: $itemId,
