@@ -31,21 +31,287 @@ class MondayService {
     }
   }
 
-  async getBoards() {
+  /**
+   * Get all boards the user has access to
+   */
+  async getAllBoards(limit = 100) {
     const query = `
-      query {
-        boards {
+      query ($limit: Int) {
+        boards(limit: $limit) {
           id
           name
-          description
+          state
+          board_kind
         }
       }
     `;
-    const data = await this.query(query);
-    return data.boards;
+    try {
+      const data = await this.query(query, { limit });
+      return data.boards || [];
+    } catch (error) {
+      console.error('Error fetching all boards:', error);
+      throw error;
+    }
   }
 
+  /**
+   * Get tasks from multiple boards in a single query
+   */
+  async getTasksFromBoards(boardIds, limit = 50) {
+    const query = `
+      query ($boardIds: [ID!], $limit: Int) {
+        boards(ids: $boardIds) {
+          id
+          name
+          columns {
+            id
+            title
+            type
+          }
+          items_page(limit: $limit) {
+            items {
+              id
+              name
+              state
+              column_values {
+                id
+                type
+                text
+                value
+              }
+              created_at
+              updated_at
+            }
+          }
+        }
+      }
+    `;
+    try {
+      const data = await this.query(query, { boardIds, limit });
+      return data.boards || [];
+    } catch (error) {
+      console.error('Error fetching tasks from boards:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get ALL tasks for a user across ALL boards with classification
+   */
+  async getAllUserTasks(userId) {
+    try {
+      console.log('Fetching all boards...');
+      const boards = await this.getAllBoards();
+      
+      if (boards.length === 0) {
+        console.log('No boards found');
+        return { tasks: [], boards: [], classified: this.getEmptyClassification() };
+      }
+
+      console.log(`Found ${boards.length} boards`);
+      
+      // Filter active boards
+      const activeBoards = boards.filter(board => 
+        board.state === 'active' || board.state === 'all_users'
+      );
+
+      console.log(`${activeBoards.length} active boards`);
+
+      if (activeBoards.length === 0) {
+        return { tasks: [], boards: [], classified: this.getEmptyClassification() };
+      }
+
+      const boardIds = activeBoards.map(b => b.id);
+
+      // Fetch tasks in batches (25 boards at a time)
+      const batchSize = 25;
+      const allTasks = [];
+
+      for (let i = 0; i < boardIds.length; i += batchSize) {
+        const batchIds = boardIds.slice(i, i + batchSize);
+        console.log(`Fetching tasks from boards ${i + 1}-${Math.min(i + batchSize, boardIds.length)}...`);
+        
+        const boardsWithTasks = await this.getTasksFromBoards(batchIds);
+        
+        // Extract and flatten tasks
+        boardsWithTasks.forEach(board => {
+          if (board.items_page && board.items_page.items) {
+            board.items_page.items.forEach(item => {
+              // Enrich column values with titles
+              const enrichedItem = {
+                ...item,
+                board_id: board.id,
+                board_name: board.name,
+                column_values: item.column_values.map(colVal => {
+                  const column = board.columns.find(c => c.id === colVal.id);
+                  return {
+                    ...colVal,
+                    title: column?.title || colVal.id,
+                    columnType: column?.type || 'unknown'
+                  };
+                })
+              };
+              allTasks.push(enrichedItem);
+            });
+          }
+        });
+
+        // Small delay between batches to respect rate limits
+        if (i + batchSize < boardIds.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      console.log(`Total tasks found: ${allTasks.length}`);
+
+      // Classify tasks
+      const classified = this.classifyTasks(allTasks, userId);
+
+      return {
+        tasks: allTasks,
+        boards: activeBoards,
+        classified
+      };
+
+    } catch (error) {
+      console.error('Error in getAllUserTasks:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Classify tasks by status, assignee, due date, etc.
+   */
+  classifyTasks(tasks, userId) {
+    const classifications = {
+      myTasks: [],
+      overdue: [],
+      dueToday: [],
+      dueThisWeek: [],
+      completed: [],
+      unassigned: [],
+      allTasks: tasks
+    };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const weekFromNow = new Date(today);
+    weekFromNow.setDate(weekFromNow.getDate() + 7);
+
+    tasks.forEach(task => {
+      // Find relevant columns
+      const statusColumn = task.column_values.find(cv => 
+        cv.type === 'color' || cv.id.includes('status') || cv.title?.toLowerCase().includes('status')
+      );
+      
+      const peopleColumn = task.column_values.find(cv => 
+        cv.type === 'multiple-person' || cv.type === 'person' || 
+        cv.title?.toLowerCase().includes('person') || cv.title?.toLowerCase().includes('assignee')
+      );
+      
+      const dateColumn = task.column_values.find(cv => 
+        cv.type === 'date' || cv.title?.toLowerCase().includes('due')
+      );
+
+      // Parse status
+      let status = 'unknown';
+      if (statusColumn && statusColumn.text) {
+        status = statusColumn.text.toLowerCase();
+      }
+
+      // Check if assigned to user
+      let isMyTask = false;
+      if (peopleColumn && peopleColumn.text) {
+        isMyTask = peopleColumn.text.includes(userId);
+      }
+
+      // Parse due date
+      let dueDate = null;
+      if (dateColumn && dateColumn.value) {
+        try {
+          const dateData = JSON.parse(dateColumn.value);
+          if (dateData.date) {
+            dueDate = new Date(dateData.date);
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+
+      // Create enriched task
+      const taskInfo = {
+        ...task,
+        status,
+        isMyTask,
+        dueDate
+      };
+
+      // Classify
+      if (isMyTask) {
+        classifications.myTasks.push(taskInfo);
+      }
+
+      if (status === 'done' || status === 'completed' || status === 'finished') {
+        classifications.completed.push(taskInfo);
+      }
+
+      if (!peopleColumn || !peopleColumn.text) {
+        classifications.unassigned.push(taskInfo);
+      }
+
+      // Check due dates (only for incomplete tasks)
+      if (dueDate && status !== 'done' && status !== 'completed') {
+        if (dueDate < today) {
+          classifications.overdue.push(taskInfo);
+        } else if (dueDate.toDateString() === today.toDateString()) {
+          classifications.dueToday.push(taskInfo);
+        } else if (dueDate <= weekFromNow) {
+          classifications.dueThisWeek.push(taskInfo);
+        }
+      }
+    });
+
+    // Sort by due date
+    const sortByDueDate = (a, b) => {
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate - b.dueDate;
+    };
+
+    classifications.myTasks.sort(sortByDueDate);
+    classifications.overdue.sort(sortByDueDate);
+    classifications.dueToday.sort(sortByDueDate);
+    classifications.dueThisWeek.sort(sortByDueDate);
+
+    return classifications;
+  }
+
+  getEmptyClassification() {
+    return {
+      myTasks: [],
+      overdue: [],
+      dueToday: [],
+      dueThisWeek: [],
+      completed: [],
+      unassigned: [],
+      allTasks: []
+    };
+  }
+
+  // Legacy method - kept for backward compatibility
+  async getBoards() {
+    return this.getAllBoards();
+  }
+
+  // Legacy method - kept for backward compatibility
   async getBoardItems(boardId, limit = 50) {
+    if (!boardId) {
+      console.warn('getBoardItems called without boardId, fetching from all boards instead');
+      const result = await this.getAllUserTasks(null);
+      return result.tasks;
+    }
+
     const query = `
       query ($boardId: [ID!], $limit: Int) {
         boards(ids: $boardId) {
@@ -202,6 +468,12 @@ class MondayService {
   }
 
   async getUserTasks(boardId, userId) {
+    // If no boardId provided, fetch from all boards
+    if (!boardId) {
+      const result = await this.getAllUserTasks(userId);
+      return result.classified.myTasks;
+    }
+
     const query = `
       query ($boardId: [ID!]) {
         boards(ids: $boardId) {
