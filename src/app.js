@@ -10,6 +10,7 @@ const cron = require('node-cron');
 const MondayService = require('./services/monday');
 const CacheService = require('./services/cache');
 const MetricsService = require('./services/metrics');
+const UserMappingService = require('./services/userMapping');
 
 // Import command handlers
 const TasksCommand = require('./commands/tasks');
@@ -29,11 +30,6 @@ const MondayWebhook = require('./webhooks/monday');
 
 // Import automation
 const DailySummary = require('./automation/dailySummary');
-
-// Initialize services
-const mondayService = new MondayService(process.env.MONDAY_API_KEY);
-const cacheService = new CacheService();
-const metricsService = new MetricsService();
 
 // Express receiver for custom routes
 const receiver = new ExpressReceiver({
@@ -59,6 +55,12 @@ const app = new App({
   receiver,
   processBeforeResponse: true
 });
+
+// Initialize services (CRITICAL: Must initialize after app for UserMappingService)
+const mondayService = new MondayService(process.env.MONDAY_API_KEY);
+const cacheService = new CacheService();
+const metricsService = new MetricsService();
+const userMappingService = new UserMappingService(app.client);
 
 // Health check endpoint
 receiver.router.get('/health', (req, res) => {
@@ -88,7 +90,7 @@ receiver.router.post('/webhook/monday', async (req, res) => {
 // Register slash commands
 app.command('/tasks', async ({ command, ack, client, respond }) => {
   await ack();
-  await TasksCommand.handle(command, client, respond, mondayService, cacheService);
+  await TasksCommand.handle(command, client, respond, mondayService, cacheService, userMappingService);
 });
 
 app.command('/task-create', async ({ command, ack, client, respond }) => {
@@ -182,6 +184,7 @@ const PORT = process.env.PORT || 3000;
   console.log(`⚡️ Unified Daily Tasks App is running on port ${PORT}`);
   console.log(`📊 Metrics available at http://localhost:${PORT}/metrics`);
   console.log(`🏥 Health check at http://localhost:${PORT}/health`);
+  console.log(`✅ User mapping service initialized`);
 })();
 
-module.exports = { app, mondayService, cacheService, metricsService };
+module.exports = { app, mondayService, cacheService, metricsService, userMappingService };
