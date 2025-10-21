@@ -2,100 +2,234 @@ class TasksCommand {
   static async handle(command, client, respond, mondayService, cacheService) {
     const startTime = Date.now();
     const userId = command.user_id;
-    const boardId = process.env.MONDAY_BOARD_ID;
 
     try {
       // Send immediate acknowledgment
       await respond({
-        text: '⏳ Fetching your tasks...',
+        text: '⏳ Fetching your tasks from all boards...',
         response_type: 'ephemeral'
       });
 
-      // Check cache first
-      let tasks = cacheService.getBoardItems(boardId);
-      
-      if (!tasks) {
-        tasks = await mondayService.getBoardItems(boardId);
-        cacheService.setBoardItems(boardId, tasks);
-      }
+      // Fetch tasks from ALL boards
+      const result = await mondayService.getAllUserTasks(userId);
+      const { classified } = result;
+      const { myTasks, overdue, dueToday, dueThisWeek, completed } = classified;
 
-      // Filter user's tasks - now uses enriched column data
-      const userTasks = tasks.filter(task => {
-        const assigneeColumn = task.column_values.find(col => 
-          col.title === 'Person' || col.id === 'person' || col.columnType === 'people'
-        );
-        return assigneeColumn && assigneeColumn.text?.includes(userId);
-      });
-
-      if (userTasks.length === 0) {
+      if (myTasks.length === 0) {
         await respond({
-          text: '📋 You have no tasks assigned to you.',
+          text: '📋 You have no tasks assigned to you across any boards.',
           response_type: 'ephemeral',
           replace_original: true
         });
         return;
       }
 
-      // Build task list
+      // Build task list with classification
       const blocks = [
         {
           type: 'header',
           text: {
             type: 'plain_text',
-            text: '📋 Your Tasks',
+            text: '📋 Your Tasks Across All Boards',
             emoji: true
           }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `You have *${userTasks.length}* task${userTasks.length > 1 ? 's' : ''} assigned.`
-          }
-        },
-        {
-          type: 'divider'
         }
       ];
 
-      // Add each task
-      userTasks.slice(0, 10).forEach(task => {
-        const statusColumn = task.column_values.find(col => 
-          col.title === 'Status' || col.id === 'status' || col.columnType === 'status'
-        );
-        const status = statusColumn?.text || 'No Status';
-        const statusEmoji = this.getStatusEmoji(status);
-
-        blocks.push({
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `${statusEmoji} *${task.name}*\n_Status: ${status}_`
-          },
-          accessory: {
-            type: 'button',
+      // Overdue tasks section
+      if (overdue.length > 0) {
+        blocks.push(
+          {
+            type: 'section',
             text: {
-              type: 'plain_text',
-              text: '✓ Complete',
-              emoji: true
-            },
-            value: task.id,
-            action_id: `complete_task_${task.id}`
+              type: 'mrkdwn',
+              text: `*🚨 Overdue (${overdue.length})*`
+            }
           }
+        );
+        
+        overdue.slice(0, 5).forEach(task => {
+          const dueDateStr = task.dueDate ? task.dueDate.toLocaleDateString() : 'No date';
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `• *${task.name}* - _${task.board_name}_\n  Due: ${dueDateStr}`
+            },
+            accessory: {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '✓ Complete',
+                emoji: true
+              },
+              value: task.id,
+              action_id: `complete_task_${task.id}`
+            }
+          });
         });
-      });
 
-      if (userTasks.length > 10) {
-        blocks.push({
+        if (overdue.length > 5) {
+          blocks.push({
+            type: 'context',
+            elements: [{
+              type: 'mrkdwn',
+              text: `_...and ${overdue.length - 5} more overdue tasks_`
+            }]
+          });
+        }
+      }
+
+      // Due today section
+      if (dueToday.length > 0) {
+        blocks.push(
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*📅 Due Today (${dueToday.length})*`
+            }
+          }
+        );
+        
+        dueToday.slice(0, 5).forEach(task => {
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `• *${task.name}* - _${task.board_name}_`
+            },
+            accessory: {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '✓ Complete',
+                emoji: true
+              },
+              value: task.id,
+              action_id: `complete_task_${task.id}`
+            }
+          });
+        });
+
+        if (dueToday.length > 5) {
+          blocks.push({
+            type: 'context',
+            elements: [{
+              type: 'mrkdwn',
+              text: `_...and ${dueToday.length - 5} more due today_`
+            }]
+          });
+        }
+      }
+
+      // Due this week section
+      if (dueThisWeek.length > 0) {
+        blocks.push(
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*📆 Due This Week (${dueThisWeek.length})*`
+            }
+          }
+        );
+        
+        dueThisWeek.slice(0, 5).forEach(task => {
+          const dueDateStr = task.dueDate ? task.dueDate.toLocaleDateString() : 'No date';
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `• *${task.name}* - _${task.board_name}_\n  Due: ${dueDateStr}`
+            },
+            accessory: {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '✓ Complete',
+                emoji: true
+              },
+              value: task.id,
+              action_id: `complete_task_${task.id}`
+            }
+          });
+        });
+
+        if (dueThisWeek.length > 5) {
+          blocks.push({
+            type: 'context',
+            elements: [{
+              type: 'mrkdwn',
+              text: `_...and ${dueThisWeek.length - 5} more due this week_`
+            }]
+          });
+        }
+      }
+
+      // Other tasks (no specific due date)
+      const otherTasks = myTasks.filter(t => 
+        !overdue.includes(t) && !dueToday.includes(t) && !dueThisWeek.includes(t)
+      );
+
+      if (otherTasks.length > 0) {
+        blocks.push(
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*📌 Other Tasks (${otherTasks.length})*`
+            }
+          }
+        );
+        
+        otherTasks.slice(0, 3).forEach(task => {
+          const statusEmoji = this.getStatusEmoji(task.status);
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `${statusEmoji} *${task.name}* - _${task.board_name}_`
+            },
+            accessory: {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '✓ Complete',
+                emoji: true
+              },
+              value: task.id,
+              action_id: `complete_task_${task.id}`
+            }
+          });
+        });
+
+        if (otherTasks.length > 3) {
+          blocks.push({
+            type: 'context',
+            elements: [{
+              type: 'mrkdwn',
+              text: `_...and ${otherTasks.length - 3} more tasks_`
+            }]
+          });
+        }
+      }
+
+      // Summary footer
+      blocks.push(
+        {
+          type: 'divider'
+        },
+        {
           type: 'context',
           elements: [
             {
               type: 'mrkdwn',
-              text: `_Showing 10 of ${userTasks.length} tasks_`
+              text: `📊 *Total:* ${myTasks.length} tasks | *Completed:* ${completed.length} | *Boards:* ${result.boards.length}`
             }
           ]
-        });
-      }
+        }
+      );
 
       await respond({
         blocks,
@@ -104,12 +238,13 @@ class TasksCommand {
       });
 
       const duration = Date.now() - startTime;
-      console.log(`Tasks command completed in ${duration}ms`);
+      console.log(`Tasks command completed in ${duration}ms - Found ${myTasks.length} tasks across ${result.boards.length} boards`);
 
     } catch (error) {
       console.error('Error in tasks command:', error);
       await respond({
-        text: '❌ Failed to retrieve tasks. Please try again.',
+        text: '❌ Failed to retrieve tasks from Monday.com. Please try again.\n' +
+              'If this persists, contact support.',
         response_type: 'ephemeral',
         replace_original: true
       });
@@ -117,15 +252,15 @@ class TasksCommand {
   }
 
   static getStatusEmoji(status) {
-    const statusMap = {
-      'Done': '✅',
-      'Working on it': '🔄',
-      'Stuck': '🚫',
-      'Not Started': '⚪',
-      'In Progress': '🔵',
-      'Complete': '✅'
-    };
-    return statusMap[status] || '📌';
+    const statusLower = status?.toLowerCase() || '';
+    
+    if (statusLower.includes('done') || statusLower.includes('complete')) return '✅';
+    if (statusLower.includes('working') || statusLower.includes('progress')) return '🔄';
+    if (statusLower.includes('stuck') || statusLower.includes('blocked')) return '🚫';
+    if (statusLower.includes('review')) return '👀';
+    if (statusLower === 'unknown' || statusLower === '') return '⚪';
+    
+    return '📌';
   }
 }
 
