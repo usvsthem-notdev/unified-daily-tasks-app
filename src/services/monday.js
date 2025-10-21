@@ -47,8 +47,8 @@ class MondayService {
 
   async getBoardItems(boardId, limit = 50) {
     const query = `
-      query ($boardId: ID!, $limit: Int) {
-        boards(ids: [$boardId]) {
+      query ($boardId: [ID!], $limit: Int) {
+        boards(ids: $boardId) {
           items_page(limit: $limit) {
             items {
               id
@@ -56,7 +56,6 @@ class MondayService {
               state
               column_values {
                 id
-                title
                 text
                 value
               }
@@ -67,7 +66,7 @@ class MondayService {
         }
       }
     `;
-    const data = await this.query(query, { boardId, limit });
+    const data = await this.query(query, { boardId: [boardId], limit });
     return data.boards[0]?.items_page?.items || [];
   }
 
@@ -115,8 +114,8 @@ class MondayService {
 
   async getItem(itemId) {
     const query = `
-      query ($itemId: ID!) {
-        items(ids: [$itemId]) {
+      query ($itemId: [ID!]) {
+        items(ids: $itemId) {
           id
           name
           state
@@ -126,14 +125,13 @@ class MondayService {
           }
           column_values {
             id
-            title
             text
             value
           }
         }
       }
     `;
-    const data = await this.query(query, { itemId });
+    const data = await this.query(query, { itemId: [itemId] });
     return data.items[0];
   }
 
@@ -164,15 +162,14 @@ class MondayService {
 
   async getUserTasks(boardId, userId) {
     const query = `
-      query ($boardId: ID!) {
-        boards(ids: [$boardId]) {
+      query ($boardId: [ID!]) {
+        boards(ids: $boardId) {
           items_page {
             items {
               id
               name
               column_values {
                 id
-                title
                 text
                 value
                 ... on PeopleValue {
@@ -186,7 +183,7 @@ class MondayService {
         }
       }
     `;
-    const data = await this.query(query, { boardId });
+    const data = await this.query(query, { boardId: [boardId] });
     const items = data.boards[0]?.items_page?.items || [];
     
     // Filter items assigned to user
