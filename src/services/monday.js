@@ -49,6 +49,11 @@ class MondayService {
     const query = `
       query ($boardId: [ID!], $limit: Int) {
         boards(ids: $boardId) {
+          columns {
+            id
+            title
+            type
+          }
           items_page(limit: $limit) {
             items {
               id
@@ -56,6 +61,7 @@ class MondayService {
               state
               column_values {
                 id
+                type
                 text
                 value
               }
@@ -67,7 +73,22 @@ class MondayService {
       }
     `;
     const data = await this.query(query, { boardId: [boardId], limit });
-    return data.boards[0]?.items_page?.items || [];
+    const board = data.boards[0];
+    const items = board?.items_page?.items || [];
+    const columns = board?.columns || [];
+    
+    // Enrich items with column metadata
+    return items.map(item => ({
+      ...item,
+      column_values: item.column_values.map(colVal => {
+        const column = columns.find(c => c.id === colVal.id);
+        return {
+          ...colVal,
+          title: column?.title || colVal.id,
+          columnType: column?.type || 'unknown'
+        };
+      })
+    }));
   }
 
   async createItem(boardId, itemName, columnValues = {}) {
@@ -122,9 +143,15 @@ class MondayService {
           board {
             id
             name
+            columns {
+              id
+              title
+              type
+            }
           }
           column_values {
             id
+            type
             text
             value
           }
@@ -132,7 +159,21 @@ class MondayService {
       }
     `;
     const data = await this.query(query, { itemId: [itemId] });
-    return data.items[0];
+    const item = data.items[0];
+    
+    // Enrich with column titles
+    if (item && item.board) {
+      item.column_values = item.column_values.map(colVal => {
+        const column = item.board.columns.find(c => c.id === colVal.id);
+        return {
+          ...colVal,
+          title: column?.title || colVal.id,
+          columnType: column?.type || 'unknown'
+        };
+      });
+    }
+    
+    return item;
   }
 
   async deleteItem(itemId) {
@@ -164,12 +205,18 @@ class MondayService {
     const query = `
       query ($boardId: [ID!]) {
         boards(ids: $boardId) {
+          columns {
+            id
+            title
+            type
+          }
           items_page {
             items {
               id
               name
               column_values {
                 id
+                type
                 text
                 value
                 ... on PeopleValue {
@@ -184,10 +231,25 @@ class MondayService {
       }
     `;
     const data = await this.query(query, { boardId: [boardId] });
-    const items = data.boards[0]?.items_page?.items || [];
+    const board = data.boards[0];
+    const items = board?.items_page?.items || [];
+    const columns = board?.columns || [];
+    
+    // Enrich items with column metadata
+    const enrichedItems = items.map(item => ({
+      ...item,
+      column_values: item.column_values.map(colVal => {
+        const column = columns.find(c => c.id === colVal.id);
+        return {
+          ...colVal,
+          title: column?.title || colVal.id,
+          columnType: column?.type || 'unknown'
+        };
+      })
+    }));
     
     // Filter items assigned to user
-    return items.filter(item => {
+    return enrichedItems.filter(item => {
       const peopleColumn = item.column_values.find(col => col.persons_and_teams);
       if (!peopleColumn) return false;
       return peopleColumn.persons_and_teams.some(person => person.id === userId);

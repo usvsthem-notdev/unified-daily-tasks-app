@@ -5,6 +5,12 @@ class TasksCommand {
     const boardId = process.env.MONDAY_BOARD_ID;
 
     try {
+      // Send immediate acknowledgment
+      await respond({
+        text: '⏳ Fetching your tasks...',
+        response_type: 'ephemeral'
+      });
+
       // Check cache first
       let tasks = cacheService.getBoardItems(boardId);
       
@@ -13,10 +19,10 @@ class TasksCommand {
         cacheService.setBoardItems(boardId, tasks);
       }
 
-      // Filter user's tasks
+      // Filter user's tasks - now uses enriched column data
       const userTasks = tasks.filter(task => {
         const assigneeColumn = task.column_values.find(col => 
-          col.title === 'Person' || col.id === 'person'
+          col.title === 'Person' || col.id === 'person' || col.columnType === 'people'
         );
         return assigneeColumn && assigneeColumn.text?.includes(userId);
       });
@@ -24,7 +30,8 @@ class TasksCommand {
       if (userTasks.length === 0) {
         await respond({
           text: '📋 You have no tasks assigned to you.',
-          response_type: 'ephemeral'
+          response_type: 'ephemeral',
+          replace_original: true
         });
         return;
       }
@@ -54,7 +61,7 @@ class TasksCommand {
       // Add each task
       userTasks.slice(0, 10).forEach(task => {
         const statusColumn = task.column_values.find(col => 
-          col.title === 'Status' || col.id === 'status'
+          col.title === 'Status' || col.id === 'status' || col.columnType === 'status'
         );
         const status = statusColumn?.text || 'No Status';
         const statusEmoji = this.getStatusEmoji(status);
@@ -92,7 +99,8 @@ class TasksCommand {
 
       await respond({
         blocks,
-        response_type: 'ephemeral'
+        response_type: 'ephemeral',
+        replace_original: true
       });
 
       const duration = Date.now() - startTime;
@@ -102,7 +110,8 @@ class TasksCommand {
       console.error('Error in tasks command:', error);
       await respond({
         text: '❌ Failed to retrieve tasks. Please try again.',
-        response_type: 'ephemeral'
+        response_type: 'ephemeral',
+        replace_original: true
       });
     }
   }
