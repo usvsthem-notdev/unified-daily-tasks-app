@@ -76,10 +76,10 @@ receiver.router.get('/metrics', (req, res) => {
   res.json(metricsService.getMetrics());
 });
 
-// Monday.com webhook endpoint
+// Monday.com webhook endpoint - NOW WITH USER MAPPING
 receiver.router.post('/webhook/monday', async (req, res) => {
   try {
-    await MondayWebhook.handle(req.body, app, mondayService);
+    await MondayWebhook.handle(req.body, app, mondayService, userMappingService);
     res.status(200).json({ status: 'success' });
   } catch (error) {
     console.error('Webhook error:', error);
@@ -162,12 +162,17 @@ app.action(/^update_task_.*/, async ({ action, ack, body, client }) => {
   await ButtonHandler.handleUpdateTask(action, body, client, mondayService);
 });
 
-// Schedule daily summary
+// Schedule daily summary - NOW WITH USER MAPPING
 const summaryTime = process.env.DAILY_SUMMARY_TIME || '09:00';
 const [hour, minute] = summaryTime.split(':');
 cron.schedule(`${minute} ${hour} * * *`, async () => {
   console.log('Running daily task summary...');
-  await DailySummary.send(app, mondayService, cacheService);
+  try {
+    await DailySummary.send(app, mondayService, cacheService, userMappingService);
+  } catch (error) {
+    console.error('Error in daily summary cron job:', error);
+    metricsService.recordError(error);
+  }
 });
 
 // Error handling
@@ -185,6 +190,7 @@ const PORT = process.env.PORT || 3000;
   console.log(`📊 Metrics available at http://localhost:${PORT}/metrics`);
   console.log(`🏥 Health check at http://localhost:${PORT}/health`);
   console.log(`✅ User mapping service initialized`);
+  console.log(`✅ Channel error fixes applied`);
 })();
 
 module.exports = { app, mondayService, cacheService, metricsService, userMappingService };
